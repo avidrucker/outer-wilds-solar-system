@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import GUI from 'lil-gui';
+import './style.css';
 
 /**
  * Outer Wilds Sun
@@ -23,6 +24,8 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
 // ensure body has no margin (CSS already sets this but keep in JS too)
 document.body.style.margin = "0";
+// ensure the page background matches the space backdrop when CSS isn't loaded
+document.body.style.background = '#05010a';
 
 // Append the canvas to the body and make it fixed so it doesn't add to document flow.
 // This prevents other page elements (like #app with padding) from increasing
@@ -109,6 +112,15 @@ const sunFragment = /* glsl */ `
   uniform float uFbmLacunarity;
   uniform float uVibrance;
   uniform float uSaturation;
+  // spot / loop parameters
+  uniform float uSpotScale;
+  uniform float uSpotIntensity;
+  uniform float uSpotThresholdLow;
+  uniform float uSpotThresholdHigh;
+  uniform float uSpotFlowRadius;
+  uniform float uLoopPeriod;
+  uniform float uSpotPulse;
+  uniform float uSpotPhaseScale;
 
   varying vec3 vObjNormal;
   varying vec3 vViewNormal;
@@ -166,19 +178,39 @@ const sunFragment = /* glsl */ `
     // Two layers:
     // - large convection blobs (low frequency)
     // - small turbulent detail (high frequency)
+    // base flow for large/small layers
     vec3 flow = vec3(uTime * 0.08, uTime * 0.05, -uTime * 0.06);
 
-  float large = fbm3(nrm * uLargeScale + flow);              // big shapes
-  float small = fbm3(nrm * uSmallScale - flow * uSmallFlowFactor);       // fine detail
+    float large = fbm3(nrm * uLargeScale + flow);              // big shapes
+    float small = fbm3(nrm * uSmallScale - flow * uSmallFlowFactor);       // fine detail
+
+    // --- looped spot mask: sample fbm while rotating an offset in 2D to create a loopable variation
+  // Compute per-position static spot base from FBM
+  float spotBase = fbm3(nrm * uSpotScale);
+
+  // Per-position phase derived from spotBase so each location pulses independently.
+  // This keeps spots roughly stationary but allows them to fade in/out at different times.
+  float phase = fract(spotBase * uSpotPhaseScale);
+
+  // normalized time in [0,1]
+  float tnorm = mod(uTime, uLoopPeriod) / uLoopPeriod;
+  float pulse = 0.5 + 0.5 * sin(6.28318530718 * (tnorm + phase));
+
+  // modulation mixes spotBase and pulse, controlled by uSpotPulse
+  float spotMod = spotBase + uSpotPulse * (pulse - 0.5);
+  float spotMask = smoothstep(uSpotThresholdLow, uSpotThresholdHigh, spotMod);
+    
 
     // Combine them in a way that avoids huge uniform bands
     float surface = 0.65 * large + 0.35 * small;
 
     // Make hot regions tighter: push heat toward 0 most of the time
-    float heat = smoothstep(0.15, 0.95, surface);
+  float heat = smoothstep(0.15, 0.95, surface);
     heat = pow(heat, 1.6); // compress mid-tones -> more orange overall
+  // blend in spot mask as additional local heat
+  heat = max(heat, mix(heat, uSpotIntensity, spotMask));
 
-    vec3 color = mix(uBaseColor, uHotColor, heat);
+  vec3 color = mix(uBaseColor, uHotColor, heat);
 
     // Rim glow: use view-space normal so it hugs silhouette, not latitudinal rings
     // Make it tighter and weaker than before to avoid white blowout.
@@ -310,6 +342,15 @@ const sunMaterial = new THREE.ShaderMaterial({
     uFbmAmp: { value: 0.42 },
     uFbmGain: { value: 0.48 },
     uFbmLacunarity: { value: 2.0 },
+    // spot / loop defaults
+    uSpotScale: { value: 6.0 },
+    uSpotIntensity: { value: 0.6 },
+    uSpotThresholdLow: { value: 0.45 },
+    uSpotThresholdHigh: { value: 0.68 },
+    uSpotFlowRadius: { value: 1.5 },
+    uLoopPeriod: { value: 12.0 },
+    uSpotPulse: { value: 0.5 },
+    uSpotPhaseScale: { value: 1.2 },
   },
 });
 
@@ -322,7 +363,7 @@ scene.add(sphere);
 
 // NOTE: More segments makes the halo smoother (your 16,16 looks polygonal).
 // This is a cheap mesh; 48 is still fine.
-const haloGeo = new THREE.SphereGeometry(100, 60, 60);
+const haloGeo = new THREE.SphereGeometry(90, 60, 60);
 
 // Halo shader: uses view-space normal to compute a rim factor.
 // Rim is strongest at the silhouette and fades toward center.
@@ -419,11 +460,9 @@ function animate() {
   requestAnimationFrame(animate);
 
   const dt = clock.getDelta();
-  const t = clock.elapsedTime;
 
-  // CHANGED (important): update uTime every frame (not once at startup)
-  sunMaterial.uniforms.uTime.value = t;
-
+  // NOTE: we intentionally do NOT update uTime so the shader (surface + spots)
+  // remains static. The only animation retained is the slow rotation of the sphere.
   // rotate the sun slowly (purely aesthetic)
   sphere.rotation.y += dt * 0.3;
 
@@ -439,6 +478,85 @@ animate();
 // ----------------------
 // 10) GUI for live tuning + copy-to-clipboard
 // ----------------------
+// Attempt to load defaults from repo-mounted sun-config.json and provide a Reset button.
+// If the file isn't present (e.g. running locally before committing), this quietly fails.
+// Replace async external config loading with a simple embedded defaults object.
+const bundledDefaults = {
+  uVibrance: 4,
+  uSaturation: 1.35,
+  uBaseColor: '#ff5b14',
+  uHotColor: '#ffc24a',
+  noise: {
+    largeScale: 3.87,
+    smallScale: 14.2,
+    smallFlowFactor: 1.96,
+    fbmAmp: 0.42,
+    fbmGain: 0.48,
+    fbmLacunarity: 2
+  },
+  spots: {
+    spotScale: 1,
+    spotIntensity: 0,
+    spotThresholdLow: 0,
+    spotThresholdHigh: 0,
+    spotFlowRadius: 0,
+    loopPeriod: 60,
+    spotPulse: 0,
+    spotPhaseScale: 0.1
+  },
+  halo: {
+    intensity: 8,
+    alpha: 0.4,
+    power: 2.2,
+    size: 0.9
+  },
+  toneMappingExposure: 1
+};
+
+// Apply the bundled defaults immediately so uniforms are initialized.
+applyConfigFromObject(bundledDefaults);
+
+function applyConfigFromObject(j) {
+  try {
+    if (j.uVibrance !== undefined) sunMaterial.uniforms.uVibrance.value = j.uVibrance;
+    if (j.uSaturation !== undefined) sunMaterial.uniforms.uSaturation.value = j.uSaturation;
+    if (j.uBaseColor) sunMaterial.uniforms.uBaseColor.value.set(j.uBaseColor);
+    if (j.uHotColor) sunMaterial.uniforms.uHotColor.value.set(j.uHotColor);
+    if (j.noise) {
+      const n = j.noise;
+      if (n.largeScale !== undefined) sunMaterial.uniforms.uLargeScale.value = n.largeScale;
+      if (n.smallScale !== undefined) sunMaterial.uniforms.uSmallScale.value = n.smallScale;
+      if (n.smallFlowFactor !== undefined) sunMaterial.uniforms.uSmallFlowFactor.value = n.smallFlowFactor;
+      if (n.fbmAmp !== undefined) sunMaterial.uniforms.uFbmAmp.value = n.fbmAmp;
+      if (n.fbmGain !== undefined) sunMaterial.uniforms.uFbmGain.value = n.fbmGain;
+      if (n.fbmLacunarity !== undefined) sunMaterial.uniforms.uFbmLacunarity.value = n.fbmLacunarity;
+    }
+    if (j.spots) {
+      const s = j.spots;
+      if (s.spotScale !== undefined) sunMaterial.uniforms.uSpotScale.value = s.spotScale;
+      if (s.spotIntensity !== undefined) sunMaterial.uniforms.uSpotIntensity.value = s.spotIntensity;
+      if (s.spotThresholdLow !== undefined) sunMaterial.uniforms.uSpotThresholdLow.value = s.spotThresholdLow;
+      if (s.spotThresholdHigh !== undefined) sunMaterial.uniforms.uSpotThresholdHigh.value = s.spotThresholdHigh;
+      if (s.spotFlowRadius !== undefined) sunMaterial.uniforms.uSpotFlowRadius.value = s.spotFlowRadius;
+      if (s.loopPeriod !== undefined) sunMaterial.uniforms.uLoopPeriod.value = s.loopPeriod;
+      if (s.spotPulse !== undefined) sunMaterial.uniforms.uSpotPulse.value = s.spotPulse;
+      if (s.spotPhaseScale !== undefined) sunMaterial.uniforms.uSpotPhaseScale.value = s.spotPhaseScale;
+    }
+    if (j.halo) {
+      const h = j.halo;
+      if (h.intensity !== undefined) halo.material.uniforms.uIntensity.value = h.intensity;
+      if (h.alpha !== undefined) halo.material.uniforms.uAlpha.value = h.alpha;
+      if (h.power !== undefined) halo.material.uniforms.uPower.value = h.power;
+      if (h.size !== undefined) halo.scale.setScalar(h.size);
+    }
+    if (j.toneMappingExposure !== undefined) renderer.toneMappingExposure = j.toneMappingExposure;
+  } catch (err) {
+    console.warn('Failed to apply config object', err);
+  }
+}
+
+// No external config fetch: using embedded defaults to keep startup deterministic.
+
 try {
   const gui = new GUI({ width: 320 });
 
@@ -450,15 +568,15 @@ try {
     haloIntensity: halo.material.uniforms.uIntensity.value,
     haloAlpha: halo.material.uniforms.uAlpha.value,
     haloPower: halo.material.uniforms.uPower.value,
+    haloScale: halo.scale.x,
     // renderer tone mapping/exposure (optional)
     toneMappingExposure: renderer.toneMappingExposure || 1.0,
-    // noise params (expose defaults here so GUI shows current values)
-    uLargeScale: sunMaterial.uniforms.uLargeScale.value,
-    uSmallScale: sunMaterial.uniforms.uSmallScale.value,
-    uSmallFlowFactor: sunMaterial.uniforms.uSmallFlowFactor.value,
-    uFbmAmp: sunMaterial.uniforms.uFbmAmp.value,
-    uFbmGain: sunMaterial.uniforms.uFbmGain.value,
-    uFbmLacunarity: sunMaterial.uniforms.uFbmLacunarity.value,
+  // noise params (expose defaults here so GUI shows current values)
+  uLargeScale: sunMaterial.uniforms.uLargeScale.value,
+  uSmallScale: sunMaterial.uniforms.uSmallScale.value,
+  uFbmAmp: sunMaterial.uniforms.uFbmAmp.value,
+  uFbmGain: sunMaterial.uniforms.uFbmGain.value,
+  uFbmLacunarity: sunMaterial.uniforms.uFbmLacunarity.value,
   };
 
   const sunFolder = gui.addFolder('Sun');
@@ -483,9 +601,7 @@ try {
   noiseFolder.add(params, 'uSmallScale', 2.0, 30.0, 0.1).name('Small scale').onChange(v => {
     sunMaterial.uniforms.uSmallScale.value = v;
   });
-  noiseFolder.add(params, 'uSmallFlowFactor', 0.1, 4.0, 0.01).name('Small flow factor').onChange(v => {
-    sunMaterial.uniforms.uSmallFlowFactor.value = v;
-  });
+  // smallFlowFactor (temporal flow) removed — surface is static
   noiseFolder.add(params, 'uFbmAmp', 0.1, 1.2, 0.01).name('FBM amp').onChange(v => {
     sunMaterial.uniforms.uFbmAmp.value = v;
   });
@@ -496,6 +612,10 @@ try {
     sunMaterial.uniforms.uFbmLacunarity.value = v;
   });
   noiseFolder.open();
+
+  // Spots and temporal flow removed — static surface only. (Spot params are still
+  // readable/appliable via applyConfigFromObject if present, but the GUI no
+  // longer exposes controls for them.)
   sunFolder.open();
 
   const haloFolder = gui.addFolder('Halo');
@@ -507,6 +627,10 @@ try {
   });
   haloFolder.add(params, 'haloPower', 0.5, 6, 0.01).name('Power').onChange(v => {
     halo.material.uniforms.uPower.value = v;
+  });
+  // New control: overall halo size (scales the halo mesh)
+  haloFolder.add(params, 'haloScale', 0.6, 1.6, 0.01).name('Size').onChange(v => {
+    halo.scale.setScalar(v);
   });
   haloFolder.open();
 
@@ -520,6 +644,13 @@ try {
       uSaturation: params.uSaturation,
       uBaseColor: params.uBaseColor,
       uHotColor: params.uHotColor,
+      noise: {
+        largeScale: params.uLargeScale,
+        smallScale: params.uSmallScale,
+        fbmAmp: params.uFbmAmp,
+        fbmGain: params.uFbmGain,
+        fbmLacunarity: params.uFbmLacunarity,
+      },
       halo: {
         intensity: params.haloIntensity,
         alpha: params.haloAlpha,
@@ -552,6 +683,147 @@ try {
       alert('Clipboard API not available — config printed to console');
     }
   } }, 'copyConfig').name('Copy config JSON');
+
+  gui.add({ saveConfig: () => {
+    const out = JSON.stringify({
+      uVibrance: params.uVibrance,
+      uSaturation: params.uSaturation,
+      uBaseColor: params.uBaseColor,
+      uHotColor: params.uHotColor,
+      noise: {
+        largeScale: params.uLargeScale,
+        smallScale: params.uSmallScale,
+        fbmAmp: params.uFbmAmp,
+        fbmGain: params.uFbmGain,
+        fbmLacunarity: params.uFbmLacunarity,
+      },
+      halo: {
+        intensity: params.haloIntensity,
+        alpha: params.haloAlpha,
+        power: params.haloPower,
+        size: params.haloScale,
+      },
+      toneMappingExposure: params.toneMappingExposure,
+    }, null, 2);
+    const blob = new Blob([out], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sun-config.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } }, 'saveConfig').name('Save config JSON');
+
+  gui.add({ loadConfig: () => {
+    const txt = prompt('Paste config JSON here:');
+    if (!txt) return;
+    try {
+      const j = JSON.parse(txt);
+      // apply top-level
+      if (j.uVibrance !== undefined) sunMaterial.uniforms.uVibrance.value = j.uVibrance;
+      if (j.uSaturation !== undefined) sunMaterial.uniforms.uSaturation.value = j.uSaturation;
+      if (j.uBaseColor) sunMaterial.uniforms.uBaseColor.value.set(j.uBaseColor);
+      if (j.uHotColor) sunMaterial.uniforms.uHotColor.value.set(j.uHotColor);
+      if (j.noise) {
+        const n = j.noise;
+        if (n.largeScale !== undefined) sunMaterial.uniforms.uLargeScale.value = n.largeScale;
+        if (n.smallScale !== undefined) sunMaterial.uniforms.uSmallScale.value = n.smallScale;
+        if (n.smallFlowFactor !== undefined) sunMaterial.uniforms.uSmallFlowFactor.value = n.smallFlowFactor;
+        if (n.fbmAmp !== undefined) sunMaterial.uniforms.uFbmAmp.value = n.fbmAmp;
+        if (n.fbmGain !== undefined) sunMaterial.uniforms.uFbmGain.value = n.fbmGain;
+        if (n.fbmLacunarity !== undefined) sunMaterial.uniforms.uFbmLacunarity.value = n.fbmLacunarity;
+      }
+      if (j.spots) {
+        const s = j.spots;
+        if (s.spotScale !== undefined) sunMaterial.uniforms.uSpotScale.value = s.spotScale;
+        if (s.spotIntensity !== undefined) sunMaterial.uniforms.uSpotIntensity.value = s.spotIntensity;
+        if (s.spotThresholdLow !== undefined) sunMaterial.uniforms.uSpotThresholdLow.value = s.spotThresholdLow;
+        if (s.spotThresholdHigh !== undefined) sunMaterial.uniforms.uSpotThresholdHigh.value = s.spotThresholdHigh;
+        if (s.spotFlowRadius !== undefined) sunMaterial.uniforms.uSpotFlowRadius.value = s.spotFlowRadius;
+        if (s.loopPeriod !== undefined) sunMaterial.uniforms.uLoopPeriod.value = s.loopPeriod;
+        if (s.spotPulse !== undefined) sunMaterial.uniforms.uSpotPulse.value = s.spotPulse;
+        if (s.spotPhaseScale !== undefined) sunMaterial.uniforms.uSpotPhaseScale.value = s.spotPhaseScale;
+      }
+      if (j.halo) {
+        const h = j.halo;
+        if (h.intensity !== undefined) halo.material.uniforms.uIntensity.value = h.intensity;
+        if (h.alpha !== undefined) halo.material.uniforms.uAlpha.value = h.alpha;
+        if (h.power !== undefined) halo.material.uniforms.uPower.value = h.power;
+      }
+      if (j.toneMappingExposure !== undefined) renderer.toneMappingExposure = j.toneMappingExposure;
+      alert('Config applied');
+      // Update the GUI controls to reflect the newly applied values
+      if (typeof syncGuiFromMaterial === 'function') syncGuiFromMaterial();
+    } catch (err) {
+      alert('Invalid JSON: ' + err.message);
+    }
+  } }, 'loadConfig').name('Load config (paste)');
+
+  // Reset to the embedded bundled defaults
+  gui.add({ resetDefaults: () => {
+    applyConfigFromObject(bundledDefaults);
+    if (typeof syncGuiFromMaterial === 'function') syncGuiFromMaterial();
+    alert('Defaults applied');
+  } }, 'resetDefaults').name('Reset to defaults');
+
+  // Keep the GUI in sync with current shader uniforms and renderer state.
+  // This will read the current uniforms, update the `params` object, and call
+  // updateDisplay() on every controller so the GUI visually matches live values.
+  function syncGuiFromMaterial() {
+    try {
+      // top-level
+      params.uVibrance = sunMaterial.uniforms.uVibrance.value;
+      params.uSaturation = sunMaterial.uniforms.uSaturation.value;
+      params.uBaseColor = '#' + sunMaterial.uniforms.uBaseColor.value.getHexString();
+      params.uHotColor = '#' + sunMaterial.uniforms.uHotColor.value.getHexString();
+      params.haloIntensity = halo.material.uniforms.uIntensity.value;
+      params.haloAlpha = halo.material.uniforms.uAlpha.value;
+      params.haloPower = halo.material.uniforms.uPower.value;
+      params.toneMappingExposure = renderer.toneMappingExposure || 1.0;
+      params.haloScale = halo.scale.x;
+
+      // noise
+      params.uLargeScale = sunMaterial.uniforms.uLargeScale.value;
+      params.uSmallScale = sunMaterial.uniforms.uSmallScale.value;
+      params.uFbmAmp = sunMaterial.uniforms.uFbmAmp.value;
+      params.uFbmGain = sunMaterial.uniforms.uFbmGain.value;
+      params.uFbmLacunarity = sunMaterial.uniforms.uFbmLacunarity.value;
+
+      // spots: not exposed in GUI (static)
+
+      // update top-level controllers
+      if (gui && gui.__controllers) {
+        gui.__controllers.forEach(c => {
+          if (c && typeof c.updateDisplay === 'function') c.updateDisplay();
+        });
+      }
+
+      // update controllers inside folders
+      if (gui && gui.__folders) {
+        Object.values(gui.__folders).forEach(folder => {
+          if (folder && folder.__controllers) {
+            folder.__controllers.forEach(c => {
+              if (c && typeof c.updateDisplay === 'function') c.updateDisplay();
+            });
+          }
+        });
+      }
+      // ensure haloScale display updates too (some gui implementations keep it in a folder)
+      try {
+        const haloCtrl = gui.__controllers && gui.__controllers.find(c => c.property === 'haloScale');
+        if (haloCtrl && typeof haloCtrl.updateDisplay === 'function') haloCtrl.updateDisplay();
+      } catch (e) { /* ignore */ }
+    } catch (err) {
+      console.warn('Failed to sync GUI from material:', err);
+    }
+  }
+
+  // Ensure GUI shows current values at creation time (handles the case where
+  // a startup fetch already applied sun-config.json before the GUI was created).
+  syncGuiFromMaterial();
+  
 
 } catch (e) {
   // GUI import might fail if the package hasn't been installed yet — handle gracefully
