@@ -18,3 +18,5 @@
   position: relative;
   z-index: 1;
 }
+
+.lil-gui { background: transparent; }
