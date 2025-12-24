@@ -74,7 +74,9 @@ controls.enablePan = true;
 // ----------------------
 // 3) Geometry: the sun sphere
 // ----------------------
-const geometry = new THREE.SphereGeometry(70, 16, 16);
+// Use the scaled radius from solarConfig to keep sun size consistent with planets
+const sunRadius = solarConfig.bodies.Sun.radius;
+const geometry = new THREE.SphereGeometry(sunRadius, 16, 16);
 
 // ----------------------
 // 4) Lighting (optional for the sun shader, useful later)
@@ -245,7 +247,10 @@ scene.add(sphere);
 // ----------------------
 // 7) Sun halo / glow shell (radial gradient via shader)
 // ----------------------
-const haloGeo = new THREE.SphereGeometry(90, 60, 60);
+
+const haloRadius = solarConfig.bodies.Sun.radius * 1.20;
+
+const haloGeo = new THREE.SphereGeometry(haloRadius, 60, 60);
 
 const haloVertex = /* glsl */ `
   varying vec3 vViewNormal;
