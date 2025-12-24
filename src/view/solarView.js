@@ -16,6 +16,7 @@ export function createSolarView(scene, config, overrides = {}) {
   scene.add(group);
 
   const meshes = {};
+  const orbitLines = {}; // map name -> orbit line mesh
 
   // Helper: build a sphere
   function makeSphere(radius, color, segments = 32) {
@@ -24,6 +25,19 @@ export function createSolarView(scene, config, overrides = {}) {
       color,
       roughness: 1.0,
       metalness: 0.0,
+    });
+    return new THREE.Mesh(geo, mat);
+  }
+
+  // Helper: create a thin orbit line (thin torusgeometry or circle line)
+  // Using a thin flat torus to represent the orbital plane.
+  function makeOrbitLine(radius, color = 0x888888, tubeRadius = 0.5) {
+    const geo = new THREE.TorusGeometry(radius, tubeRadius, 8, 128);
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
     });
     return new THREE.Mesh(geo, mat);
   }
@@ -60,6 +74,61 @@ export function createSolarView(scene, config, overrides = {}) {
 
     meshes[name] = mesh;
     group.add(mesh);
+
+    // --- Create orbit line for this body (if it has an orbit) ---
+    if (b.orbit) {
+      const orbitColor = 0x666688; // subtle blue-gray for orbits
+      const orbitLine = makeOrbitLine(b.orbit.radius, orbitColor, 1.5);
+
+      // Apply the same inclination + node rotations as the orbit math
+      if (b.orbit.inclination) {
+        orbitLine.rotateX(b.orbit.inclination);
+      }
+      if (b.orbit.node) {
+        orbitLine.rotateZ(b.orbit.node);
+      }
+
+      // Determine parent: moons orbit their parent, others orbit sun (at origin)
+      const parent = b.parent ? b.parent : null;
+
+      if (parent && meshes[parent]) {
+        // Moon orbit: attach to parent planet
+        meshes[parent].add(orbitLine);
+      } else {
+        // Primary/barycenter orbit: fixed in sun's reference frame (at origin)
+        group.add(orbitLine);
+      }
+
+      orbitLines[name] = {
+        mesh: orbitLine,
+        parent: parent,
+        radius: b.orbit.radius,
+      };
+    }
+  }
+
+  // --- NEW: Add orbit line for TwinsBarycenter (the center point between the twins) ---
+  const twinsBaryBody = config.bodies.TwinsBarycenter;
+  if (twinsBaryBody && twinsBaryBody.orbit) {
+    const baryOrbitColor = 0x666688; // same subtle blue-gray as other orbits
+    const baryOrbitLine = makeOrbitLine(twinsBaryBody.orbit.radius, baryOrbitColor, 1.5);
+
+    // Apply inclination + node rotations (same as other orbits)
+    if (twinsBaryBody.orbit.inclination) {
+      baryOrbitLine.rotateX(twinsBaryBody.orbit.inclination);
+    }
+    if (twinsBaryBody.orbit.node) {
+      baryOrbitLine.rotateZ(twinsBaryBody.orbit.node);
+    }
+
+    // Attach to the main group (sun's reference frame) so it orbits the sun
+    group.add(baryOrbitLine);
+
+    orbitLines.TwinsBarycenter = {
+      mesh: baryOrbitLine,
+      parent: null, // orbits the sun
+      radius: twinsBaryBody.orbit.radius,
+    };
   }
 
   // --- New: create cylinder "tube" that will connect the Hourglass Twins ---
@@ -117,10 +186,10 @@ export function createSolarView(scene, config, overrides = {}) {
       } else {
         tube.visible = false;
       }
-    } else if (tube) {
+      } else if (tube) {
       tube.visible = false;
     }
   }
 
-  return { group, meshes, applyPositions };
+  return { group, meshes, applyPositions, orbitLines };
 }
