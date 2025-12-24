@@ -15,20 +15,20 @@ function rotateZ(v, angle) {
 }
 
 function orbitPos({ radius, period, phase = 0, inclination = 0, node = 0 }, t) {
-  // period <= 0 means “static”
+  // period <= 0 means "static"
   const theta = phase + (period > 0 ? (TAU * (t / period)) : 0);
 
-  // base orbit in XZ plane
+  // base orbit in XY plane (not XZ)
   let p = {
     x: radius * Math.cos(theta),
-    y: 0,
-    z: radius * Math.sin(theta),
+    y: radius * Math.sin(theta),
+    z: 0,
   };
 
   // optional orbit plane orientation:
   // 1) rotate around X for inclination
   p = rotateX(p, inclination);
-  // 2) rotate around Z for ascending node (optional)
+  // 2) rotate around Z for ascending node
   p = rotateZ(p, node);
 
   return p;
