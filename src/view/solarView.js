@@ -31,7 +31,7 @@ export function createSolarView(scene, config, overrides = {}) {
 
   // Helper: create a thin orbit line (thin torusgeometry or circle line)
   // Using a thin flat torus to represent the orbital plane.
-  function makeOrbitLine(radius, color = 0x888888, tubeRadius = 0.5) {
+  function makeOrbitLine(radius, color = 0x888888, tubeRadius = 0.2) {
     const geo = new THREE.TorusGeometry(radius, tubeRadius, 8, 128);
     const mat = new THREE.MeshBasicMaterial({
       color,
@@ -78,7 +78,7 @@ export function createSolarView(scene, config, overrides = {}) {
     // --- Create orbit line for this body (if it has an orbit) ---
     if (b.orbit) {
       const orbitColor = 0x666688; // subtle blue-gray for orbits
-      const orbitLine = makeOrbitLine(b.orbit.radius, orbitColor, 1.5);
+      const orbitLine = makeOrbitLine(b.orbit.radius, orbitColor);
 
       // Apply the same inclination + node rotations as the orbit math
       if (b.orbit.inclination) {
@@ -111,7 +111,7 @@ export function createSolarView(scene, config, overrides = {}) {
   const twinsBaryBody = config.bodies.TwinsBarycenter;
   if (twinsBaryBody && twinsBaryBody.orbit) {
     const baryOrbitColor = 0x666688; // same subtle blue-gray as other orbits
-    const baryOrbitLine = makeOrbitLine(twinsBaryBody.orbit.radius, baryOrbitColor, 1.5);
+    const baryOrbitLine = makeOrbitLine(twinsBaryBody.orbit.radius, baryOrbitColor);
 
     // Apply inclination + node rotations (same as other orbits)
     if (twinsBaryBody.orbit.inclination) {
