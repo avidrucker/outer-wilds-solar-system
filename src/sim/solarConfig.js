@@ -16,7 +16,7 @@ function keplerPeriod(radiusMeters) {
 const SCALE = 1 / 100; // 100 game meters = 1 visual unit
 
 export const solarConfig = {
-  timeScale: 1, // speed up time if needed (e.g., 60 = 60x faster)
+  timeScale: 0.25, // speed up time if needed (e.g., 60 = 60x faster)
   order: [
     "Sun",
     "TwinsBarycenter",
