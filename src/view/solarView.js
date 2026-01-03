@@ -26,7 +26,10 @@ export function createSolarView(scene, config, overrides = {}) {
       roughness: 1.0,
       metalness: 0.0,
     });
-    return new THREE.Mesh(geo, mat);
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    return m;
   }
 
   // Helper: create a thin orbit line (thin torusgeometry or circle line)
@@ -73,6 +76,7 @@ export function createSolarView(scene, config, overrides = {}) {
     const mesh = makeSphere(radius, color, seg);
 
     meshes[name] = mesh;
+    mesh.castShadow = true;
     group.add(mesh);
 
     // --- Create orbit line for this body (if it has an orbit) ---
@@ -135,16 +139,23 @@ export function createSolarView(scene, config, overrides = {}) {
   // Cylinder geometry is created with height=1 so we can scale Y to the desired length.
   // Default radius is 1 -> we then scale X/Z to set actual visual radius.
   const tubeGeo = new THREE.CylinderGeometry(3, 3, 1, 16);
-  const tubeMat = new THREE.MeshBasicMaterial({
+  const tubeMat = new THREE.MeshStandardMaterial({
     color: 0xffcc77,
+    roughness: 0.6,
+    metalness: 0.0,
     transparent: true,
-    opacity: 0.95,
-    depthWrite: false, // keep it visually blended with soft edges if desired
+    opacity: 0.85,
+    // NOTE: leave depthWrite ON so shadows and depth sorting behave normally.
+    // If you *really* want soft additive “glow sand”, do that as a second mesh later.
+    depthWrite: true,
   });
   const twinsTube = new THREE.Mesh(tubeGeo, tubeMat);
   twinsTube.name = "TwinsTube";
   // start hidden until positions are available
   twinsTube.visible = false;
+  // Make it behave like the planets with respect to shadows.
+  twinsTube.castShadow = true;
+  twinsTube.receiveShadow = true;
   group.add(twinsTube);
   meshes.TwinsTube = twinsTube;
 

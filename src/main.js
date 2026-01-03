@@ -28,10 +28,15 @@ import { createSolarView } from "./view/solarView.js";
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // softer shadows
+// renderer.shadowMap.type = THREE.VSMShadowMap; // softer + blurrier shadows supposedly, but seems to turn off shadow casting on the hourglass twins
 
-// renderer.outputColorSpace = THREE.SRGBColorSpace;
-// renderer.toneMapping = THREE.ACESFilmicToneMapping;
-// renderer.toneMappingExposure = 1.15;
+// ✅ (Recommended) Better-looking lighting with Standard/Physical materials:
+// NOTE: If this looks “too bright/dim”, adjust toneMappingExposure or light intensity.
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.5;
 
 // ensure body has no margin (CSS already sets this but keep in JS too)
 document.body.style.margin = "0";
@@ -81,11 +86,32 @@ const geometry = new THREE.SphereGeometry(sunRadius, 16, 16);
 // ----------------------
 // 4) Lighting (optional for the sun shader, useful later)
 // ----------------------
-scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+// ✅ MAIN CHANGE: make the Sun act like the system’s light source.
+// White point light at the Sun’s center. StandardMaterials on planets will now shade correctly.
+//
+// Notes:
+// - intensity is scene-scale dependent; tweak if planets look too dark/bright.
+// - distance = 0 means infinite range.
+// - decay = 2 is physically-plausible inverse-square falloff (good with ACES tone mapping).
+const sunLight = new THREE.PointLight(0xffffff, 400, 0, 1);
+sunLight.position.set(0, 0, 0);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.bias = -0.0002;
 
-const light = new THREE.PointLight(0xffddaa, 2.0, 0, 2);
-light.position.set(0, 0, 0);
-scene.add(light);
+// // ✅ VSM soft shadow tuning
+// // Bigger = blurrier (start around 6–12)
+// sunLight.shadow.radius = 10;
+// // More samples = smoother blur (costs a bit)
+// sunLight.shadow.blurSamples = 16;
+
+// // ✅ PointLight shadow camera range:
+// // Larger "far" spreads texels across more space (so shadows look softer / less crisp).
+// // Too large can reduce quality everywhere, but for “space scale” softness it helps.
+// sunLight.shadow.camera.near = 1;
+// sunLight.shadow.camera.far = 5000; // match your scene scale (or a bit beyond farthest planet)
+
+scene.add(sunLight);
 
 // ----------------------
 // 5) Sun shader (Fix 1: seam-free domain)
@@ -402,7 +428,7 @@ const bundledDefaults = {
     intensity: 8,
     alpha: 0.4,
     power: 2.2,
-    size: 0.9,
+    size: 1.1,
   },
   toneMappingExposure: 1,
 };
